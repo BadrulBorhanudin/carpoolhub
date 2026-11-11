@@ -8,17 +8,21 @@ const resolvers = {
   Query: {
     // Retrieve all users and their rides with comments
     users: async () => {
-      return User.find().populate({
-        path: 'rides',
-        populate: 'comments',
-      });
+      return User.find()
+        .select('-password')
+        .populate({
+          path: 'rides',
+          populate: 'comments',
+        });
     },
     // Retrieve a single user by username with their rides and comments
     user: async (parent, { username }) => {
-      return User.findOne({ username }).populate({
-        path: 'rides',
-        populate: 'comments',
-      });
+      return User.findOne({ username })
+        .select('-password')
+        .populate({
+          path: 'rides',
+          populate: 'comments',
+        });
     },
     // Retrieve all rides, optionally filtered by username, sorted by creation date
     rides: async (parent, { username }) => {
@@ -32,10 +36,12 @@ const resolvers = {
     // Retrieve the logged-in user's data with their rides and comments
     me: async (parent, args, context) => {
       if (context.user) {
-        return User.findOne({ _id: context.user._id }).populate({
-          path: 'rides',
-          populate: 'comments',
-        });
+        return User.findOne({ _id: context.user._id })
+          .select('-password')
+          .populate({
+            path: 'rides',
+            populate: 'comments',
+          });
       }
       throw new CustomAuthenticationError('Could not authenticate user');
     },
@@ -44,22 +50,36 @@ const resolvers = {
   Mutation: {
     // Register a new user and return an authentication token
     addUser: async (parent, { username, email, password }) => {
+      if (!username || !email || !password) {
+        throw new CustomAuthenticationError(
+          'Username, email, and password are required'
+        );
+      }
+      if (password.length < 8 || password.length > 128) {
+        throw new CustomAuthenticationError(
+          'Password must be between 8 and 128 characters long'
+        );
+      }
       const user = await User.create({ username, email, password });
       const token = signToken(user);
       return { token, user };
     },
     // Authenticate a user and return an authentication token
     login: async (parent, { email, password }) => {
+      if (!email || !password) {
+        throw new CustomAuthenticationError('Invalid email or password');
+      }
+
       const user = await User.findOne({ email });
 
       if (!user) {
-        throw new CustomAuthenticationError('User not found');
+        throw new CustomAuthenticationError('Invalid email or password');
       }
 
       const correctPw = await user.isCorrectPassword(password);
 
       if (!correctPw) {
-        throw new CustomAuthenticationError('Incorrect password');
+        throw new CustomAuthenticationError('Invalid email or password');
       }
 
       const token = signToken(user);
@@ -72,45 +92,68 @@ const resolvers = {
       { origin, destination, date, time, isDriver },
       context
     ) => {
-      if (context.user) {
-        const ride = await Ride.create({
-          origin,
-          destination,
-          date,
-          time,
-          isDriver,
-          rideAuthor: context.user.username,
-        });
-
-        await User.findOneAndUpdate(
-          { _id: context.user._id },
-          { $addToSet: { rides: ride._id } }
+      if (!context.user) {
+        throw new CustomAuthenticationError(
+          'You need to be logged in to add a ride'
         );
-
-        return ride;
       }
-      throw new CustomAuthenticationError(
-        'You need to be logged in to add a ride'
+
+      const cleanOrigin = typeof origin === 'string' ? origin.trim() : '';
+      const cleanDestination =
+        typeof destination === 'string' ? destination.trim() : '';
+      const cleanDate = typeof date === 'string' ? date.trim() : '';
+      const cleanTime = typeof time === 'string' ? time.trim() : '';
+
+      if (!cleanOrigin || !cleanDestination || !cleanDate || !cleanTime) {
+        throw new CustomAuthenticationError('All ride fields are required');
+      }
+
+      const ride = await Ride.create({
+        origin: cleanOrigin,
+        destination: cleanDestination,
+        date: cleanDate,
+        time: cleanTime,
+        isDriver: Boolean(isDriver),
+        rideAuthor: context.user.username,
+      });
+
+      await User.findOneAndUpdate(
+        { _id: context.user._id },
+        { $addToSet: { rides: ride._id } }
       );
+
+      return ride;
     },
     // Add a comment to a ride
     addComment: async (parent, { rideId, commentText }, context) => {
-      if (context.user) {
-        return Ride.findOneAndUpdate(
-          { _id: rideId },
-          {
-            $addToSet: {
-              comments: { commentText, commentAuthor: context.user.username },
-            },
-          },
-          {
-            new: true,
-            runValidators: true,
-          }
+      if (!context.user) {
+        throw new CustomAuthenticationError(
+          'You need to be logged in to add a comment'
         );
       }
-      throw new CustomAuthenticationError(
-        'You need to be logged in to add a comment'
+
+      const trimmedText =
+        typeof commentText === 'string' ? commentText.trim() : '';
+      if (!trimmedText || trimmedText.length > 280) {
+        throw new CustomAuthenticationError(
+          'Comment must be between 1 and 280 characters'
+        );
+      }
+
+      return Ride.findOneAndUpdate(
+        { _id: rideId },
+        {
+          $addToSet: {
+            comments: {
+              commentText: trimmedText,
+              commentAuthor: context.user.username,
+            },
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        }
       );
     },
     // Remove a ride created by the logged-in user
@@ -158,50 +201,84 @@ const resolvers = {
       { rideId, commentId, commentText },
       context
     ) => {
-      if (context.user) {
-        const ride = await Ride.findOneAndUpdate(
-          { _id: rideId, 'comments._id': commentId },
-          { $set: { 'comments.$.commentText': commentText } },
-          { new: true }
+      if (!context.user) {
+        throw new CustomAuthenticationError(
+          'You need to be logged in to edit a comment'
         );
-
-        if (!ride) {
-          throw new CustomAuthenticationError(
-            'No ride found with the provided ID'
-          );
-        }
-
-        return ride;
       }
-      throw new CustomAuthenticationError(
-        'You need to be logged in to edit a comment'
+
+      const trimmedText =
+        typeof commentText === 'string' ? commentText.trim() : '';
+      if (!trimmedText || trimmedText.length > 280) {
+        throw new CustomAuthenticationError(
+          'Comment must be between 1 and 280 characters'
+        );
+      }
+
+      const ride = await Ride.findOneAndUpdate(
+        {
+          _id: rideId,
+          comments: {
+            $elemMatch: {
+              _id: commentId,
+              commentAuthor: context.user.username,
+            },
+          },
+        },
+        { $set: { 'comments.$.commentText': trimmedText } },
+        { new: true }
       );
+
+      if (!ride) {
+        throw new CustomAuthenticationError(
+          'Comment not found or you are not authorized to edit this comment'
+        );
+      }
+
+      return ride;
     },
     // Create a Stripe checkout session for donations
     createCheckoutSession: async (parent, { donationAmount }, context) => {
-      if (context.user) {
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ['card'],
-          line_items: [
-            {
-              price_data: {
-                currency: 'aud',
-                product_data: {
-                  name: 'Donation to CarPoolHub',
-                },
-                unit_amount: donationAmount * 100,
-              },
-              quantity: 1,
-            },
-          ],
-          mode: 'payment',
-          success_url: `${process.env.SUCCESS_URL}?session_id={CHECKOUT_SESSION_ID}`,
-        });
-        return { id: session.id };
+      if (!context.user) {
+        throw new CustomAuthenticationError(
+          'You need to be logged in to create a checkout session'
+        );
       }
-      throw new CustomAuthenticationError(
-        'You need to be logged in to create a checkout session'
-      );
+
+      const amount = Number(donationAmount);
+      if (isNaN(amount) || amount < 1 || amount > 10000) {
+        throw new CustomAuthenticationError(
+          'Donation amount must be between $1 and $10,000'
+        );
+      }
+
+      const successUrl =
+        process.env.SUCCESS_URL || 'http://localhost:3000/success';
+      const cancelUrl =
+        process.env.CANCEL_URL ||
+        process.env.SUCCESS_URL ||
+        'http://localhost:3000/support';
+
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [
+          {
+            price_data: {
+              currency: 'aud',
+              product_data: {
+                name: 'Donation to CarPoolHub',
+              },
+              unit_amount: Math.round(amount * 100),
+            },
+            quantity: 1,
+          },
+        ],
+        mode: 'payment',
+        success_url: `${successUrl}?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: cancelUrl,
+      });
+
+      return { id: session.id };
     },
   },
 };

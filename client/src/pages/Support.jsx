@@ -19,7 +19,8 @@ import { CREATE_CHECKOUT_SESSION } from '../utils/mutations';
 
 // Load Stripe outside of a component’s render to avoid recreating the Stripe object on every render.
 const stripePromise = loadStripe(
-  'pk_test_51PJvcdBVaH1iGHeJY2P6pMwJukFJAshUZ8exvD58Yxh7IA4an6IOO8po46ekOfm3sJ66lasAiA1z6NbxGGuZZElJ00pd55a9Xr'
+  import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY ||
+    'pk_test_51PJvcdBVaH1iGHeJY2P6pMwJukFJAshUZ8exvD58Yxh7IA4an6IOO8po46ekOfm3sJ66lasAiA1z6NbxGGuZZElJ00pd55a9Xr'
 );
 
 const SupportMe = () => {

@@ -18,7 +18,7 @@ module.exports = {
 
   // Middleware to authenticate user by verifying JWT
   authMiddleware: function ({ req }) {
-    let token = req.body.token || req.query.token || req.headers.authorization;
+    let token = req.headers.authorization || req.body.token;
 
     if (req.headers.authorization) {
       token = token.split(' ').pop().trim();
